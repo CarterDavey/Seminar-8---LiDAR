@@ -1,0 +1,191 @@
+---
+title: "Seminar 8 - LiDAR Assignment"
+format: html
+editor: visual
+---
+
+```{r}
+install.packages("RCSF")
+library(gstat)
+library(units)
+library(lidR)
+library(terra)
+library(mapview)
+library(RCSF)
+library(tidyr)
+library(terra)
+
+#1.	Download the .LAS file from Moodle with your name on it.
+
+
+LASfile <- system.file("extdata", "Topography.laz", package = "lidR")
+las <- readLAS("Carter Davey.las")
+plot(las)
+
+
+##a.	How many points are in your LAS file? Provide a line of code to determine this.
+print(las)
+## or. 
+num_points <- npoints(las)
+print(num_points)
+    ## there are 2.98 million points in this las file. 
+
+##b.	What is the maximum elevation within your point cloud? Provide a line of code to determine this.
+
+max_Z <- grid_metrics(las, ~max(Z))
+print(max_Z)
+
+str(las)
+
+    ## Max Z = 1395 meters
+    ## Min Z = 1367 meters
+
+```
+
+```{r}
+#2.	This question will get you producing various DEM’s:
+
+##a.	Classify ground points using the cloth simulated function (CSF) algorithm and produce a DEM using the triangular irregular network (TIN) algorithm.
+las_ground <- classify_ground(las, algorithm = csf())
+
+
+dem_csf <- rasterize_terrain(las_ground, res = 1, algorithm = tin())
+plot(dem_csf)
+
+dem_prod <- terrain(dem_csf, v = c("slope", "aspect"), unit = "radians")
+dem_hillshade <- shade(slope = dem_prod$slope, aspect = dem_prod$aspect)
+plot(dem_hillshade, col = gray(0:30/30), legend = FALSE)
+
+
+
+##b.	Classify ground points using a progressive morphological filter (PMF) algorithm and produce a DEM using the TIN algorithm.
+
+las_ground_pmf <- classify_ground(las, pmf(ws = 0.05, th = 0.15))
+plot(las_ground_pmf)
+
+dem_pmf <- grid_terrain(las_ground_pmf, algorithm = tin())
+plot(dem_pmf)
+
+
+##c.	Classify ground points using the CSF algorithm and produce a DEM using the inverse distance weighting algorithm.
+
+las_ground_csf <- classify_ground(las_ground, algorithm = csf())
+plot(las_ground_csf)
+
+dem_idw = rasterize_terrain(las_ground_csf, algorithm = knnidw(k = 6L, p = 2))
+plot(dem_idw)
+
+
+
+##d.	Briefly describe how the PMF algorithm works. 
+
+
+    ## The PMF algorithm is a progressive morphological filter algorithm that is used for ground point classification when processing LiDAR data. It works by iteratively removing non-ground points from the point cloud based on the local terrain characteristics, such as slope and curvature when your data is displayed. 
+
+
+```
+
+```{r}
+#3.	This question gets you producing some canopy height models (CHM’s):
+
+##a.	Normalize the point cloud using the inverse distance weighting algorithm, and then produce a CHM using the point-to-raster algorithm.
+
+library(lidR)
+las_norm <- normalize_height(las_ground, algorithm = knnidw(k = 10, p = 2))
+
+dem_idw <- rasterize_canopy(las_norm, res = 0.8, algorithm = p2r())
+
+plot(dem_idw)
+
+##b.	Normalize the point cloud using the TIN algorithm and then produce a CHM using the TIN algorithm as well (i.e.: the “dsmtin” algorithm).
+
+las_norm2 <- normalize_height(las_ground, res = 1, algorithm = tin())
+plot(las_norm2)
+
+dsm_tin <- rasterize_canopy(las_norm2, res = 1, algorithm = dsmtin(max_edge = 7.5))
+plot(dsm_tin)
+
+##c.	Normalize the point cloud using the TIN algorithm, and then produce a CHM using the point-to-raster algorithm.
+
+tin_norm <- normalize_height(las_ground, res = 1, algorithm = tin())
+plot(tin_norm)
+chm_p2r <- rasterize_canopy(tin_norm, res = 0.8, algorithm = p2r())
+plot(chm_p2r)
+
+##d.	Briefly describe how the inverse distance weighting algorithm works.
+
+    ## The Inverese Distance Weighting (IDW) function works by averaging the known values of neighboring points, weighted by their distances to the target location. 
+
+
+```
+
+```{r}
+#4.	Choose one of the three normalization/CHM combinations from question three to move forward with. 
+
+
+##a.	Perform individual tree segmentation (ITS) of the normalized point cloud using the Dalponte 2016 algorithm.
+
+ttops_chm <- locate_trees(las_norm, lmf(5))
+plot(ttops_chm)
+
+
+las_grnd <- classify_ground(las, algorithm = csf())
+
+las_norm <- normalize_height(las_grnd, algorithm = tin())
+
+chm <- rasterize_canopy(las_norm, res = 1, algorithm = dsmtin())
+
+trees <- locate_trees(las_norm, algorithm = lmf(5)) 
+
+las_tree_dal <- segment_trees(las_norm, algorithm = dalponte2016(chm = chm, treetops = trees))
+plot(las_tree_dal)
+
+
+##b. Perform ITS of the normalized point cloud using the Li et al. 2012 algorithm.
+
+
+las_tree_li <- segment_trees(las_norm, algorithm = li2012(dt1 = 1.5, dt2 = 2, R = 2, Zu = 15, hmin = 2, speed_up = 10))
+plot(las_tree_li)
+
+
+##c.	Perform ITS of the normalized point cloud using the Silva 2016 algorithm.
+
+las_silv <- segment_trees(las_norm, silva2016(chm, ttops))
+plot(las_silv, color = "treeID")
+
+
+##d.	Briefly describe how the Silva 2016 algorithm works.
+
+
+    ## The Silva 2016 algorithm segments point clouds into individual tree crowns, extracting features and using machine learning for the individual tree classification. It outputs labeled point clouds, enabling easier analysis of the forest structure by separating trees by colour and estimation of tree-level attributes.
+
+
+
+```
+
+```{r}
+#5.	Retrieve the crown metrics for each of the tree segmented point clouds produced in number 4. How many trees were identified in each algorithm? What is the overall tree density in each of the segmented point clouds?
+
+las_its_li <- segment_trees(las_norm, algorithm = li2012())
+metrics_li <- crown_metrics(las_its_li, .stdtreemetrics, geom = "concave")
+round(set_units(nrow(metrics_li), "stems") / set_units(st_area(las_its_li), "ha"))
+
+### Using the Li2012 algorithm, the overall tree density was 543 stems/ha.
+
+
+las_its_dalponte <- segment_trees(las_norm, algorithm = dalponte2016(chm = chm, treetops = trees))
+metrics_dalponte <- crown_metrics(las_its_dalponte, .stdtreemetrics, geom = "concave")
+round(set_units(nrow(metrics_dalponte), "stems") / set_units(st_area(las_its_dalponte), "ha"))
+
+### Using the dalponte2016 algorithm, the overall tree density was 303 stems/ha.
+
+las_its_silva <- segment_trees(las_norm, algorithm = silva2016(chm, ttops))
+metrics_silva <- crown_metrics(las_its_silva, .stdtreemetrics, geom = "concave")
+round(set_units(nrow(metrics_silva), "stems") / set_units(st_area(las_its_silva), "ha"))
+
+### Using the silva2016 algorithm, the overall tree density was also 303 stems/ha.
+
+
+##BONUS MARKS: SUBMIT ON GITHUB
+
+```
